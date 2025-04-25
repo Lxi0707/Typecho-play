@@ -9,7 +9,7 @@ from fake_useragent import UserAgent
 from urllib.parse import urljoin
 from telegram import Bot
 from telegram.error import TelegramError
-from tqdm import tqdm
+from tqdm.asyncio import tqdm_asyncio
 
 class EnhancedTypechoCrawler:
     def __init__(self):
@@ -92,16 +92,16 @@ class EnhancedTypechoCrawler:
         await self._log("开始收集文章链接...")
         post_links = []
         
-        async with tqdm(total=self.max_pages, desc="收集文章链接") as pbar:
-            for page in range(self.start_page, self.start_page + self.max_pages):
-                page_url = f"{self.blog_url}/page/{page}/" if page > 1 else self.blog_url
-                html = await self.fetch_page(page_url)
-                if html:
-                    links = self.parse_post_links(html)
-                    post_links.extend(links)
-                    await self._log(f"第{page}页找到{len(links)}篇文章")
-                await self._random_delay()
-                pbar.update(1)
+        # 使用标准tqdm而不是异步上下文管理器
+        for page in tqdm_asyncio(range(self.start_page, self.start_page + self.max_pages), 
+                               desc="收集文章链接", total=self.max_pages):
+            page_url = f"{self.blog_url}/page/{page}/" if page > 1 else self.blog_url
+            html = await self.fetch_page(page_url)
+            if html:
+                links = self.parse_post_links(html)
+                post_links.extend(links)
+                await self._log(f"第{page}页找到{len(links)}篇文章")
+            await self._random_delay()
         
         await self._log(f"共收集到{len(post_links)}篇文章链接")
         return post_links
@@ -165,10 +165,9 @@ class EnhancedTypechoCrawler:
             message += "*文章列表:*\n"
             
             for idx, (title, _, url) in enumerate(posts, 1):
-                # 优化URL显示，只保留路径部分
                 clean_url = url.replace(self.blog_url, '')
                 message += f"{idx}. [{title}]({url}) `{clean_url}`\n"
-                if idx % 5 == 0:  # 每5条消息分割一次
+                if idx % 5 == 0:
                     await bot.send_message(
                         chat_id=chat_id,
                         text=message,
@@ -201,11 +200,13 @@ class EnhancedTypechoCrawler:
             crawled_posts = []
             
             await self._log("开始爬取文章内容...")
-            for url in tqdm(post_links, desc="爬取文章"):
-                title, content, url = await self.crawl_post(url)
-                if title and content and url:
-                    crawled_posts.append((title, content, url))
-                await self._random_delay()
+            # 使用tqdm_asyncio来包装协程
+            tasks = [self.crawl_post(url) for url in post_links]
+            results = await tqdm_asyncio.gather(*tasks, desc="爬取文章")
+            
+            for result in results:
+                if all(result):  # title, content, url 都不为None
+                    crawled_posts.append(result)
             
             if crawled_posts:
                 await self.send_telegram_notification(crawled_posts)
