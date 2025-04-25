@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       visits:
-        description: 'Number of visits to simulate'
+        description: 'Number of normal visits to simulate (required URLs not included)'
         required: false
         default: '100'
 
@@ -16,17 +16,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
           
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install aiohttp asyncio beautifulsoup4
+          pip install aiohttp beautifulsoup4
+          
+      - name: Create posts.txt if not exists
+        run: |
+          if [ ! -f posts.txt ]; then
+            echo "https://www.207725.xyz/index.php/archives/13/" > posts.txt
+            echo "https://www.207725.xyz/index.php/archives/5/" >> posts.txt
+          fi
           
       - name: Run blog visitor
         env:
@@ -34,3 +41,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python blog_visitor.py --visits ${{ github.event.inputs.visits || 100 }}
+          
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: visitor-logs
+          path: |
+            *.log
+            posts.txt
