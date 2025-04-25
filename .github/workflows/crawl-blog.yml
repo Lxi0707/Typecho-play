@@ -1,0 +1,44 @@
+name: Auto Crawl Blog
+
+on:
+  schedule:
+    # 每天凌晨3点运行 (UTC时间)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      times:
+        description: 'Number of visits to simulate'
+        required: false
+        default: '15'
+        type: string
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install aiohttp beautifulsoup4
+    
+    - name: Run crawler
+      env:
+        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      run: |
+        python crawler.py \
+          --base-url "https://www.207725.xyz" \
+          --times ${{ github.event.inputs.times || 15 }} \
+          --max-pages 3 \
+          --tg-bot-token "$TG_BOT_TOKEN" \
+          --tg-chat-id "$TG_CHAT_ID" \
+          --delay 1.5
