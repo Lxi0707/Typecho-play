@@ -1,8 +1,8 @@
-name: Typecho Pro Visitor
+name: Typecho Visitor
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # 每天UTC时间2点运行
+    - cron: '0 1 * * *'  # 每天UTC时间1点运行
   workflow_dispatch:
     inputs:
       normal_visits:
@@ -16,7 +16,6 @@ on:
 jobs:
   visit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       
@@ -24,11 +23,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
-      - name: Install dependencies
+      - name: Install dependencies directly
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install aiohttp beautifulsoup4
       
       - name: Initialize posts.txt
@@ -54,5 +52,5 @@ jobs:
         with:
           name: visitor-logs
           path: |
-            visit_pro.log
+            visit.log
             posts.txt
