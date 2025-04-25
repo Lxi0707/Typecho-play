@@ -114,10 +114,10 @@ class TypechoCrawler:
                             elif not href.startswith(('http://', 'https://')):
                                 href = f"{self.base_url}/{href}"
                             
-                            # 确保是文章URL且未重复
-                            if (href.startswith(f"{self.base_url}/index.php/archives/") and \
-                               href not in seen_urls and \
-                               re.match(r'.*/archives/\d+/.*', href):
+                            # 确保是文章URL且未重复 - 这里修正了语法错误
+                            if (href.startswith(f"{self.base_url}/index.php/archives/") 
+                               and href not in seen_urls 
+                               and bool(re.match(r'.*/archives/\d+/.*', href)):
                                 seen_urls.add(href)
                                 urls.append(href)
                                 logger.debug(f"Found article: {href}")
