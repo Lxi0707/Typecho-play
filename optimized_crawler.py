@@ -7,7 +7,8 @@ import sys
 from bs4 import BeautifulSoup
 import argparse
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, DefaultDict
+from collections import defaultdict
 import re
 
 # 配置日志
@@ -29,10 +30,8 @@ class TypechoCrawler:
             'Referer': self.base_url,
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         }
-        self.visited_urls = set()
-        self.success_count = 0
-        self.failure_count = 0
         self.article_urls = []
+        self.visit_stats = defaultdict(lambda: {'success': 0, 'failed': 0})
 
     async def init_session(self):
         connector = aiohttp.TCPConnector(limit=10, force_close=True)
@@ -78,7 +77,7 @@ class TypechoCrawler:
         return True
 
     async def get_article_urls(self, max_pages: int = 10) -> List[str]:
-        """改进的文章URL抓取逻辑"""
+        """获取所有文章URL"""
         urls = []
         seen_urls = set()
         
@@ -98,12 +97,12 @@ class TypechoCrawler:
                 
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # 改进的选择器，适应Typecho的不同主题
+                # 多种选择器确保找到所有文章链接
                 link_selectors = [
-                    '.post-title a',  # 常见的选择器
-                    'h2.title a',     # 另一种常见选择器
-                    'article header h2 a',  # 更精确的选择器
-                    'a[href*="/archives/"]'  # 通用匹配
+                    '.post-title a', 
+                    'h2.title a',
+                    'article header h2 a',
+                    'a[href*="/archives/"]'
                 ]
                 
                 found_links = False
@@ -122,7 +121,6 @@ class TypechoCrawler:
                             elif not href.startswith(('http://', 'https://')):
                                 href = f"{self.base_url}/{href}"
                             
-                            # 确保是文章URL且未重复 - 使用新的验证方法
                             if self.is_valid_article_url(href) and href not in seen_urls:
                                 seen_urls.add(href)
                                 urls.append(href)
@@ -140,13 +138,11 @@ class TypechoCrawler:
                     logger.info(f"No more pages found after page {page}")
                     break
                 
-                # 随机延迟防止请求过快
                 await asyncio.sleep(random.uniform(1.0, 3.0))
         
         except Exception as e:
             logger.error(f"Error fetching article URLs: {str(e)}")
         
-        # 如果没有找到文章，使用默认的几篇文章
         if not urls:
             logger.warning("No articles found, using default URLs")
             urls = [
@@ -155,39 +151,49 @@ class TypechoCrawler:
                 f"{self.base_url}/index.php/archives/1/"
             ]
         
-        # 随机打乱URL顺序
-        random.shuffle(urls)
         self.article_urls = urls
         return urls
 
-    async def simulate_visits(self, times: int = 10, max_concurrent: int = 5):
-        """改进的模拟访问方法"""
-        self.success_count = 0
-        self.failure_count = 0
+    async def simulate_visits(self, total_visits: int = 100, max_concurrent: int = 5):
+        """精确分配访问量的模拟访问方法"""
+        if not self.article_urls:
+            logger.error("No articles to visit")
+            return
+        
+        # 计算每篇文章的基础访问次数和剩余次数
+        base_visits = total_visits // len(self.article_urls)
+        remaining_visits = total_visits % len(self.article_urls)
+        
+        # 创建访问任务列表
+        tasks = []
+        for i, url in enumerate(self.article_urls):
+            visits = base_visits + (1 if i < remaining_visits else 0)
+            for _ in range(visits):
+                tasks.append(url)
+        
+        # 随机打乱任务顺序
+        random.shuffle(tasks)
         
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def visit_with_semaphore(url):
             async with semaphore:
                 # 随机延迟
-                delay = random.uniform(1.0, 5.0)
-                await asyncio.sleep(delay)
+                await asyncio.sleep(random.uniform(1.0, 3.0))
                 
                 success, error = await self.fetch_url_with_retry(url)
                 if success:
-                    self.success_count += 1
+                    self.visit_stats[url]['success'] += 1
                 else:
-                    self.failure_count += 1
+                    self.visit_stats[url]['failed'] += 1
                     logger.warning(f"Failed to visit {url}: {error}")
         
-        # 创建访问任务
-        tasks = []
-        for _ in range(times):
-            url = random.choice(self.article_urls)
-            tasks.append(visit_with_semaphore(url))
-        
         # 执行所有任务
-        await asyncio.gather(*tasks)
+        logger.info(f"Starting {len(tasks)} visits ({total_visits} requested)...")
+        start_time = time.time()
+        await asyncio.gather(*[visit_with_semaphore(url) for url in tasks])
+        elapsed = time.time() - start_time
+        logger.info(f"Completed {len(tasks)} visits in {elapsed:.1f} seconds")
 
     async def send_telegram_notification(self, message: str):
         """发送Telegram通知"""
@@ -215,61 +221,68 @@ class TypechoCrawler:
         """格式化URL显示"""
         if url.startswith(self.base_url):
             display_url = url[len(self.base_url):]
-            # 提取文章标题或ID
             match = re.search(r'/archives/(\d+)(?:/([^/]+))?', display_url)
             if match:
                 article_id = match.group(1)
                 article_slug = match.group(2) or ""
-                return f"文章 {article_id} {article_slug}"
+                return f"/archives/{article_id} {article_slug}"
         return url
 
     def generate_report(self) -> str:
-        """生成更详细的报告"""
-        total_attempts = self.success_count + self.failure_count
-        success_rate = (self.success_count / total_attempts * 100) if total_attempts > 0 else 0
+        """生成详细的统计报告"""
+        total_success = sum(stats['success'] for stats in self.visit_stats.values())
+        total_failed = sum(stats['failed'] for stats in self.visit_stats.values())
+        total_attempts = total_success + total_failed
+        success_rate = (total_success / total_attempts * 100) if total_attempts > 0 else 0
         
-        # 统计各文章被访问次数
-        article_stats = "\n".join(
-            f"{i+1}. {self.format_url_for_display(url)}"
-            for i, url in enumerate(self.article_urls[:10])  # 只显示前10篇文章
-        )
+        # 每篇文章的访问详情
+        article_details = []
+        for url in sorted(self.article_urls, key=lambda x: self.visit_stats[x]['success'], reverse=True):
+            stats = self.visit_stats[url]
+            article_details.append(
+                f"{self.format_url_for_display(url)} - "
+                f"✅{stats['success']} ❌{stats['failed']} "
+                f"({stats['success']/(stats['success']+stats['failed'])*100:.1f}%)"
+            )
         
-        if len(self.article_urls) > 10:
-            article_stats += f"\n...（共 {len(self.article_urls)} 篇文章）"
-        
+        # 构建报告内容
         report_lines = [
-            "📊 <b>博客访问模拟报告 - 优化版</b>",
+            "📊 <b>博客访问模拟详细报告</b>",
             f"🏠 <b>博客地址:</b> {self.base_url}",
             f"🕒 <b>执行时间:</b> {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}",
             "",
             f"🔍 <b>发现文章数:</b> {len(self.article_urls)}",
             f"🔄 <b>总访问次数:</b> {total_attempts}",
-            f"✅ <b>成功访问:</b> {self.success_count} 次",
-            f"❌ <b>失败访问:</b> {self.failure_count} 次",
-            f"📈 <b>成功率:</b> {success_rate:.1f}%",
+            f"✅ <b>成功访问:</b> {total_success} 次",
+            f"❌ <b>失败访问:</b> {total_failed} 次",
+            f"📈 <b>总成功率:</b> {success_rate:.1f}%",
             "",
-            "📝 <b>部分文章列表:</b>",
-            article_stats,
+            "📝 <b>文章访问详情:</b>",
+            *article_details[:20],  # 最多显示20篇文章详情
             "",
-            "⚡ <b>执行结果:</b> " + ("✅ 成功" if success_rate > 70 else "⚠️ 一般" if success_rate > 50 else "❌ 不理想"),
+            f"⚡ <b>执行结果:</b> {'✅ 成功' if success_rate > 90 else '⚠️ 一般' if success_rate > 70 else '❌ 不理想'}",
             "",
             "💡 <b>建议:</b> " + (
-                "访问情况良好，继续保持！" if success_rate > 80 else
+                "访问情况非常理想" if success_rate > 90 else
+                "访问情况良好，可适当增加访问量" if success_rate > 80 else
                 "访问成功率一般，建议检查服务器状态" if success_rate > 60 else
                 "访问成功率较低，建议调整访问频率或检查网络设置"
             )
         ]
         
+        if len(article_details) > 20:
+            report_lines.insert(-4, f"...（共 {len(article_details)} 篇文章的详细数据）")
+        
         return "\n".join(report_lines)
 
 async def main():
-    parser = argparse.ArgumentParser(description='Typecho博客模拟访问工具 - 优化版')
+    parser = argparse.ArgumentParser(description='Typecho博客精确访问模拟工具')
     parser.add_argument('--base-url', type=str, default='https://www.207725.xyz', help='博客基础URL')
-    parser.add_argument('--times', type=int, default=30, help='模拟访问次数')
-    parser.add_argument('--max-pages', type=int, default=5, help='最大抓取页面数')
+    parser.add_argument('--visits', type=int, default=100, help='总访问次数')
+    parser.add_argument('--max-pages', type=int, default=10, help='最大抓取页面数')
     parser.add_argument('--tg-bot-token', type=str, help='Telegram Bot Token')
     parser.add_argument('--tg-chat-id', type=str, help='Telegram Chat ID')
-    parser.add_argument('--max-concurrent', type=int, default=3, help='最大并发请求数')
+    parser.add_argument('--max-concurrent', type=int, default=5, help='最大并发请求数')
     args = parser.parse_args()
 
     crawler = TypechoCrawler(
@@ -283,17 +296,19 @@ async def main():
         
         # 获取文章URL
         logger.info("开始抓取文章URL...")
+        start_time = time.time()
         article_urls = await crawler.get_article_urls(max_pages=args.max_pages)
-        logger.info(f"共找到 {len(article_urls)} 篇文章")
+        elapsed = time.time() - start_time
+        logger.info(f"共找到 {len(article_urls)} 篇文章，耗时 {elapsed:.1f} 秒")
         
         if not article_urls:
             logger.error("未找到任何文章，退出程序")
             return
         
         # 模拟访问
-        logger.info(f"开始模拟 {args.times} 次访问...")
+        logger.info(f"开始模拟 {args.visits} 次访问...")
         start_time = time.time()
-        await crawler.simulate_visits(times=args.times, max_concurrent=args.max_concurrent)
+        await crawler.simulate_visits(total_visits=args.visits, max_concurrent=args.max_concurrent)
         elapsed = time.time() - start_time
         logger.info(f"模拟访问完成，耗时 {elapsed:.1f} 秒")
         
