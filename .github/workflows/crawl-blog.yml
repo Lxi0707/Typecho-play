@@ -35,12 +35,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install aiohttp beautifulsoup4
     
-    - name: Run optimized crawler
+    - name: Run precise_crawler.py
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       run: |
-        python optimized_crawler.py \
+        python precise_crawler.py \
           --base-url "https://www.207725.xyz" \
           --times ${{ github.event.inputs.times || 30 }} \
           --max-pages ${{ github.event.inputs.max_pages || 5 }} \
