@@ -1,4 +1,4 @@
-name: Typecho Visitor
+name: Typecho Pro Visitor
 
 on:
   schedule:
@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: Install dependencies directly
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install aiohttp beautifulsoup4
@@ -42,9 +42,13 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python blog_visitor_pro.py \
-            --normal-visits ${{ github.event.inputs.normal_visits || 500 }} \
-            ${ { github.event.inputs.required_visits && '--required-visits ' + github.event.inputs.required_visits || '' } }
+          if [ -z "${{ github.event.inputs.required_visits }}" ]; then
+            python blog_visitor_pro.py --normal-visits ${{ github.event.inputs.normal_visits || 500 }}
+          else
+            python blog_visitor_pro.py \
+              --normal-visits ${{ github.event.inputs.normal_visits || 500 }} \
+              --required-visits ${{ github.event.inputs.required_visits }}
+          fi
       
       - name: Upload logs
         if: always()
