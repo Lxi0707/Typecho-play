@@ -5,12 +5,14 @@ import random
 import argparse
 from datetime import datetime
 import logging
-from typing import List, Dict, Tuple
+import os
+from typing import List, Dict, Tuple, Optional
 
 # 配置部分
 BLOG_URL = "https://www.207725.xyz"
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # 替换为你的Telegram bot token
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"     # 替换为你的Telegram chat ID
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # 从环境变量获取
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")      # 从环境变量获取
+POSTS_FILE = "posts.txt"  # 必刷URL列表文件
 
 # 用户代理列表
 USER_AGENTS = [
@@ -33,9 +35,34 @@ class BlogVisitor:
         self.total_visits = total_visits
         self.success_count = 0
         self.failure_count = 0
+        self.required_success = 0
+        self.required_failure = 0
         self.visited_urls: Dict[str, int] = {}
+        self.required_urls: Dict[str, int] = {}
         self.session = None
         self.article_urls = []  # 存储获取到的文章URL
+        self.required_article_urls = []  # 存储必刷的文章URL
+
+    async def load_required_urls(self) -> bool:
+        """从posts.txt加载必刷URL列表"""
+        try:
+            if not os.path.exists(POSTS_FILE):
+                logger.warning(f"未找到必刷URL文件 {POSTS_FILE}")
+                return False
+                
+            with open(POSTS_FILE, 'r', encoding='utf-8') as f:
+                urls = [line.strip() for line in f if line.strip()]
+                self.required_article_urls = [url for url in urls if url.startswith(('http://', 'https://'))]
+                
+            if not self.required_article_urls:
+                logger.warning(f"必刷URL文件 {POSTS_FILE} 中没有有效的URL")
+                return False
+                
+            logger.info(f"从 {POSTS_FILE} 加载了 {len(self.required_article_urls)} 个必刷URL")
+            return True
+        except Exception as e:
+            logger.error(f"加载必刷URL文件时出错: {str(e)}")
+            return False
 
     async def fetch_article_urls(self) -> List[str]:
         """从博客首页获取文章链接"""
@@ -51,7 +78,6 @@ class BlogVisitor:
                     if response.status == 200:
                         text = await response.text()
                         # 简单的解析逻辑，根据Typecho的结构获取文章链接
-                        # 这里需要根据实际HTML结构调整
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(text, 'html.parser')
                         article_links = []
@@ -86,7 +112,7 @@ class BlogVisitor:
                 f"{BLOG_URL}/index.php/archives/1/",
             ]
 
-    async def visit_url(self, url: str):
+    async def visit_url(self, url: str, is_required: bool = False):
         """访问单个URL"""
         try:
             headers = {
@@ -102,26 +128,53 @@ class BlogVisitor:
             
             async with self.session.get(url, headers=headers) as response:
                 if response.status == 200:
-                    self.success_count += 1
-                    self.visited_urls[url] = self.visited_urls.get(url, 0) + 1
+                    if is_required:
+                        self.required_success += 1
+                        self.required_urls[url] = self.required_urls.get(url, 0) + 1
+                    else:
+                        self.success_count += 1
+                        self.visited_urls[url] = self.visited_urls.get(url, 0) + 1
                     logger.info(f"成功访问: {url}")
                 else:
-                    self.failure_count += 1
+                    if is_required:
+                        self.required_failure += 1
+                    else:
+                        self.failure_count += 1
                     logger.warning(f"访问失败: {url}, 状态码: {response.status}")
         except Exception as e:
-            self.failure_count += 1
+            if is_required:
+                self.required_failure += 1
+            else:
+                self.failure_count += 1
             logger.error(f"访问 {url} 时出错: {str(e)}")
 
-    async def run_visits(self):
-        """执行访问任务"""
-        start_time = datetime.now()
+    async def run_required_visits(self):
+        """执行必刷URL的访问"""
+        if not self.required_article_urls:
+            return
+            
+        logger.info(f"开始访问 {len(self.required_article_urls)} 个必刷URL")
+        
+        tasks = []
+        async with aiohttp.ClientSession() as self.session:
+            for url in self.required_article_urls:
+                tasks.append(self.visit_url(url, is_required=True))
+            
+            await asyncio.gather(*tasks)
+        
+        logger.info(f"必刷URL访问完成: 成功 {self.required_success}, 失败 {self.required_failure}")
+
+    async def run_normal_visits(self):
+        """执行普通访问任务"""
+        if self.total_visits <= 0:
+            return
+            
         logger.info(f"开始模拟访问，总次数: {self.total_visits}")
         
         # 获取文章URL列表
         self.article_urls = await self.fetch_article_urls()
         if not self.article_urls:
-            logger.error("无法获取文章URL列表，退出")
-            await self.send_notification("❌ 模拟访问失败: 无法获取文章URL列表")
+            logger.error("无法获取文章URL列表，跳过普通访问")
             return
         
         logger.info(f"获取到 {len(self.article_urls)} 篇文章")
@@ -142,10 +195,26 @@ class BlogVisitor:
             # 并发执行所有访问任务
             await asyncio.gather(*tasks)
         
+        logger.info(f"普通访问完成: 成功 {self.success_count}, 失败 {self.failure_count}")
+
+    async def run_visits(self):
+        """执行访问任务"""
+        start_time = datetime.now()
+        
+        # 加载必刷URL
+        await self.load_required_urls()
+        
+        # 先执行必刷URL访问
+        await self.run_required_visits()
+        
+        # 再执行普通访问
+        await self.run_normal_visits()
+        
         # 计算统计信息
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
-        requests_per_second = self.total_visits / duration if duration > 0 else 0
+        total_requests = self.required_success + self.required_failure + self.success_count + self.failure_count
+        requests_per_second = total_requests / duration if duration > 0 else 0
         
         # 发送通知
         await self.send_statistics(start_time, end_time, duration, requests_per_second)
@@ -157,25 +226,34 @@ class BlogVisitor:
             f"⏱️ 开始时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"⏱️ 结束时间: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"⏳ 总耗时: {duration:.2f} 秒\n"
-            f"🚀 总访问次数: {self.total_visits}\n"
-            f"✅ 成功次数: {self.success_count}\n"
-            f"❌ 失败次数: {self.failure_count}\n"
-            f"📈 平均速度: {rps:.2f} 次/秒\n\n"
-            "🔗 访问分布:\n"
+            f"🚀 总请求次数: {self.required_success + self.required_failure + self.success_count + self.failure_count}\n\n"
+            "🔴 必刷URL统计:\n"
+            f"  ✅ 成功: {self.required_success}\n"
+            f"  ❌ 失败: {self.required_failure}\n\n"
+            "🟢 普通访问统计:\n"
+            f"  🎯 目标次数: {self.total_visits}\n"
+            f"  ✅ 成功: {self.success_count}\n"
+            f"  ❌ 失败: {self.failure_count}\n"
+            f"  📈 平均速度: {rps:.2f} 次/秒\n\n"
         )
         
-        # 添加每个URL的访问统计
-        for url, count in self.visited_urls.items():
-            # 美化URL显示，只保留路径部分
-            display_url = url.replace(BLOG_URL, "")
-            message += f"  - {display_url}: {count} 次\n"
+        # 添加必刷URL的访问统计
+        if self.required_urls:
+            message += "📌 必刷URL访问分布:\n"
+            for url, count in self.required_urls.items():
+                display_url = url.replace(BLOG_URL, "")
+                message += f"  - {display_url}: {count} 次\n"
+            message += "\n"
         
-        # 添加成功率和总结
-        success_rate = (self.success_count / self.total_visits * 100) if self.total_visits > 0 else 0
-        message += (
-            f"\n🎯 成功率: {success_rate:.2f}%\n"
-            f"🌐 博客地址: {BLOG_URL}"
-        )
+        # 添加普通URL的访问统计
+        if self.visited_urls:
+            message += "📝 普通URL访问分布:\n"
+            for url, count in self.visited_urls.items():
+                display_url = url.replace(BLOG_URL, "")
+                message += f"  - {display_url}: {count} 次\n"
+        
+        # 添加总结
+        message += f"\n🌐 博客地址: {BLOG_URL}"
         
         await self.send_notification(message)
     
@@ -189,7 +267,7 @@ class BlogVisitor:
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
-            "parse_mode": "HTML",
+            "parse_mode": "Markdown",
             "disable_web_page_preview": True
         }
         
@@ -197,7 +275,10 @@ class BlogVisitor:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload) as response:
                     if response.status != 200:
-                        logger.error(f"发送Telegram通知失败，状态码: {response.status}")
+                        error_text = await response.text()
+                        logger.error(f"发送Telegram通知失败，状态码: {response.status}, 响应: {error_text}")
+                    else:
+                        logger.info("Telegram通知发送成功")
         except Exception as e:
             logger.error(f"发送Telegram通知时出错: {str(e)}")
 
@@ -208,7 +289,7 @@ def parse_args():
         "-n", "--visits",
         type=int,
         default=100,
-        help="总访问次数，默认为100",
+        help="普通访问次数(必刷URL不计入此数量)，默认为100",
     )
     return parser.parse_args()
 
