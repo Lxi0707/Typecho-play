@@ -2,7 +2,6 @@ name: Async Typecho Blog Crawler
 
 on:
   schedule:
-    # 每天 UTC 时间 8:00 运行 (北京时间 16:00)
     - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
@@ -43,7 +42,7 @@ jobs:
         python async_typecho_crawler.py "$TARGET_URL" "$VISIT_COUNT"
         
     - name: Archive results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # 这里从v3改为v4
       if: always()
       with:
         name: async-crawl-results
