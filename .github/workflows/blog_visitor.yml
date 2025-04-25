@@ -22,37 +22,37 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
           
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install aiohttp beautifulsoup4
-          sudo apt-get update && sudo apt-get install -y python3.11-dev
           
-      - name: Ensure posts.txt exists
+      - name: Initialize posts.txt
         run: |
           if [ ! -f posts.txt ]; then
+            echo "Initializing posts.txt with default URLs..."
             echo "https://www.207725.xyz/index.php/archives/13/" > posts.txt
             echo "https://www.207725.xyz/index.php/archives/5/" >> posts.txt
-            echo "Created default posts.txt with sample URLs"
+            cat posts.txt
           else
-            echo "Using existing posts.txt"
+            echo "Using existing posts.txt:"
             cat posts.txt
           fi
           
-      - name: Run blog visitor
+      - name: Run visitor script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python blog_visitor.py --visits ${{ github.event.inputs.visits || 100 }}
           
-      - name: Upload debug files on failure
+      - name: Upload debug info on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: visitor-debug-${{ github.run_id }}
+          name: visitor-debug-${{ github.run_number }}
           path: |
             *.log
             posts.txt
-            blog_visitor.py
