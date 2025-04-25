@@ -1,4 +1,4 @@
-name: Typecho Blog Crawler
+name: Async Typecho Blog Crawler
 
 on:
   schedule:
@@ -10,6 +10,10 @@ on:
         description: 'Typecho blog post URL to crawl'
         required: true
         default: 'https://www.207725.xyz'
+      visit_count:
+        description: 'Number of simulated visits (1-5)'
+        required: false
+        default: '1'
 
 jobs:
   crawl-and-notify:
@@ -27,19 +31,22 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests beautifulsoup4 python-telegram-bot lxml
+        pip install aiohttp beautifulsoup4 python-telegram-bot lxml fake-useragent aiodns
         
-    - name: Run Typecho crawler
+    - name: Run Async Typecho crawler
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TARGET_URL: ${{ github.event.inputs.target_url || 'https://www.207725.xyz' }}
+        VISIT_COUNT: ${{ github.event.inputs.visit_count || '1' }}
       run: |
-        python typecho_crawler.py "$TARGET_URL"
+        python async_typecho_crawler.py "$TARGET_URL" "$VISIT_COUNT"
         
     - name: Archive results
       uses: actions/upload-artifact@v3
       if: always()
       with:
-        name: typecho-crawl-results
-        path: typecho_output.html
+        name: async-crawl-results
+        path: |
+          typecho_output.html
+          async_crawl_log.txt
