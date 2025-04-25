@@ -1,4 +1,4 @@
-name: Auto Crawl Blog - Optimized
+name: Auto Crawl Blog - Precise Visits
 
 on:
   schedule:
@@ -6,15 +6,15 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
-      times:
+      visits:
         description: 'Number of visits to simulate'
         required: false
-        default: '30'
+        default: '1000'
         type: string
       max_pages:
         description: 'Max pages to crawl for articles'
         required: false
-        default: '5'
+        default: '10'
         type: string
 
 jobs:
@@ -35,15 +35,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install aiohttp beautifulsoup4
     
-    - name: Run precise_crawler.py
+    - name: Run precise crawler
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       run: |
         python precise_crawler.py \
           --base-url "https://www.207725.xyz" \
-          --times ${{ github.event.inputs.times || 30 }} \
-          --max-pages ${{ github.event.inputs.max_pages || 5 }} \
+          --visits ${{ github.event.inputs.visits || 1000 }} \
+          --max-pages ${{ github.event.inputs.max_pages || 10 }} \
           --tg-bot-token "$TG_BOT_TOKEN" \
           --tg-chat-id "$TG_CHAT_ID" \
-          --max-concurrent 3
+          --max-concurrent 5
