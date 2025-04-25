@@ -69,6 +69,14 @@ class TypechoCrawler:
         
         return False, last_error
 
+    def is_valid_article_url(self, href: str) -> bool:
+        """验证URL是否是有效的文章URL"""
+        if not href.startswith(f"{self.base_url}/index.php/archives/"):
+            return False
+        if not re.search(r'/archives/\d+/', href):
+            return False
+        return True
+
     async def get_article_urls(self, max_pages: int = 10) -> List[str]:
         """改进的文章URL抓取逻辑"""
         urls = []
@@ -114,10 +122,8 @@ class TypechoCrawler:
                             elif not href.startswith(('http://', 'https://')):
                                 href = f"{self.base_url}/{href}"
                             
-                            # 确保是文章URL且未重复 - 这里修正了语法错误
-                            if (href.startswith(f"{self.base_url}/index.php/archives/") 
-                               and href not in seen_urls 
-                               and bool(re.match(r'.*/archives/\d+/.*', href)):
+                            # 确保是文章URL且未重复 - 使用新的验证方法
+                            if self.is_valid_article_url(href) and href not in seen_urls:
                                 seen_urls.add(href)
                                 urls.append(href)
                                 logger.debug(f"Found article: {href}")
