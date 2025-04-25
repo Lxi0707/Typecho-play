@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Typecho博客专业访问脚本V3.1
-优化点：
-1. 完全兼容GitHub Actions环境
-2. 无需requirements.txt文件
-3. 必刷URL独立访问控制
-4. 智能错误恢复机制
+Typecho博客专业访问脚本V3.2
+更新内容：
+1. 修复GitHub Actions参数传递问题
+2. 保持所有原有功能不变
+3. 增强错误处理
 """
 
 import asyncio
@@ -25,10 +24,10 @@ CONFIG = {
     'telegram_timeout': 15,
     'request_timeout': 20,
     'min_delay': 1.0,
-    'max_delay': 4.0,
+    'max_delay': 3.0,
     'max_retries': 2,
     'conn_limit': 10,
-    'req_per_url': 3,
+    'req_per_url': 3,  # 默认每个必刷URL访问次数
     'default_urls': [
         '/index.php/archives/13/',
         '/index.php/archives/5/'
@@ -46,7 +45,7 @@ USER_AGENTS = [
 class TypechoVisitor:
     def __init__(self, normal_visits: int, required_visits: Optional[int] = None):
         self.normal_visits = normal_visits
-        self.required_visits = required_visits or CONFIG['req_per_url']
+        self.required_visits = required_visits if required_visits is not None else CONFIG['req_per_url']
         self.stats = {
             'required': {'success': 0, 'failure': 0, 'urls': {}},
             'normal': {'success': 0, 'failure': 0, 'urls': {}}
@@ -80,7 +79,8 @@ class TypechoVisitor:
         return aiohttp.TCPConnector(
             limit=CONFIG['conn_limit'],
             force_close=False,
-            enable_cleanup_closed=True
+            enable_cleanup_closed=True,
+            ssl=False
         )
 
     async def _get_urls(self) -> Tuple[List[str], List[str]]:
@@ -167,13 +167,12 @@ class TypechoVisitor:
         self.stats[key]['failure'] += 1
         return False
 
-    async def _run_visits(self, urls: List[str], is_required: bool):
-        """执行批量访问"""
+    async def _run_required_visits(self, urls: List[str]):
+        """执行必刷URL访问"""
         if not urls:
-            return logger.error(f"无有效的{'必刷' if is_required else '普通'}URL")
+            return logger.warning("没有必刷URL，跳过该阶段")
             
-        visit_count = self.required_visits if is_required else self.normal_visits // len(urls)
-        logger.info(f"开始{'必刷' if is_required else '普通'}访问 | URL数: {len(urls)} | 次数: {visit_count}次/URL")
+        logger.info(f"开始必刷访问 | URL数: {len(urls)} | 每URL次数: {self.required_visits}")
         
         async with aiohttp.ClientSession(
             connector=await self._get_connector(),
@@ -181,8 +180,33 @@ class TypechoVisitor:
         ) as session:
             tasks = []
             for url in urls:
-                for _ in range(visit_count):
-                    tasks.append(self._visit(session, url, is_required))
+                for _ in range(self.required_visits):
+                    tasks.append(self._visit(session, url, True))
+            
+            await asyncio.gather(*tasks)
+
+    async def _run_normal_visits(self, urls: List[str]):
+        """执行普通URL访问"""
+        if self.normal_visits <= 0:
+            return logger.info("普通访问次数为0，跳过该阶段")
+            
+        if not urls:
+            return logger.error("没有可用的普通URL")
+            
+        base_visits = self.normal_visits // len(urls)
+        extra_visits = self.normal_visits % len(urls)
+        
+        logger.info(f"开始普通访问 | URL数: {len(urls)} | 总次数: {self.normal_visits}")
+        
+        async with aiohttp.ClientSession(
+            connector=await self._get_connector(),
+            timeout=aiohttp.ClientTimeout(total=CONFIG['request_timeout'])
+        ) as session:
+            tasks = []
+            for i, url in enumerate(urls):
+                visits = base_visits + (1 if i < extra_visits else 0)
+                for _ in range(visits):
+                    tasks.append(self._visit(session, url, False))
             
             await asyncio.gather(*tasks)
 
@@ -192,10 +216,11 @@ class TypechoVisitor:
         req = self.stats['required']
         norm = self.stats['normal']
         
-        def format_urls(urls: Dict[str, int]) -> str:
+        def format_urls(urls: Dict[str, int], limit: int = 15) -> str:
+            sorted_items = sorted(urls.items(), key=lambda x: -x[1])[:limit]
             return '\n'.join(
-                f"  - {url.replace(CONFIG['blog_url'], ''):<30}: {count}次"
-                for url, count in sorted(urls.items(), key=lambda x: -x[1])
+                f"  - {url.replace(CONFIG['blog_url'], ''):<35}: {count}次"
+                for url, count in sorted_items
             )
         
         return (
@@ -210,8 +235,10 @@ class TypechoVisitor:
             f"  • 成功: {norm['success']}次\n"
             f"  • 失败: {norm['failure']}次\n"
             f"  • 成功率: {norm['success']/self.normal_visits*100:.1f}%\n\n"
-            "📌 访问分布:\n"
-            f"{format_urls({**req['urls'], **norm['urls']})}"
+            "📌 必刷URL访问详情:\n"
+            f"{format_urls(req['urls'])}\n\n"
+            "📝 普通URL访问TOP15:\n"
+            f"{format_urls(norm['urls'])}"
         )
 
     async def _send_report(self):
@@ -222,42 +249,48 @@ class TypechoVisitor:
         if not (token := os.getenv('TELEGRAM_BOT_TOKEN')) or not (chat_id := os.getenv('TELEGRAM_CHAT_ID')):
             return logger.warning("未配置Telegram通知")
             
-        async with aiohttp.ClientSession() as session:
-            await session.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    'chat_id': chat_id,
-                    'text': report,
-                    'parse_mode': 'Markdown'
-                },
+        try:
+            async with aiohttp.ClientSession(
+                connector=await self._get_connector(),
                 timeout=aiohttp.ClientTimeout(total=CONFIG['telegram_timeout'])
-            )
+            ) as session:
+                await session.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        'chat_id': chat_id,
+                        'text': report,
+                        'parse_mode': 'Markdown',
+                        'disable_web_page_preview': True
+                    }
+                )
+        except Exception as e:
+            logger.error(f"发送报告失败: {str(e)}")
 
     async def execute(self):
         """主执行流程"""
         required_urls, normal_urls = await self._get_urls()
         
-        await self._run_visits(required_urls, is_required=True)
-        await self._run_visits(normal_urls, is_required=False)
+        await self._run_required_visits(required_urls)
+        await self._run_normal_visits(normal_urls)
         
         await self._send_report()
         logger.info("任务执行完成")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Typecho博客访问脚本",
+        description="Typecho博客专业访问脚本",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
         '-n', '--normal-visits',
         type=int,
         default=500,
-        help='普通访问次数'
+        help='普通访问目标次数（默认500）'
     )
     parser.add_argument(
         '-r', '--required-visits',
         type=int,
-        help='每个必刷URL的访问次数（覆盖默认值）'
+        help='每个必刷URL的访问次数（默认3次）'
     )
     args = parser.parse_args()
     
