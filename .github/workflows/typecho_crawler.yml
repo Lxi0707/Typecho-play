@@ -1,18 +1,14 @@
-name: Enhanced Typecho Blog Crawler
+name: Typecho Blog Crawler
 
 on:
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
-      start_page:
-        description: 'Start page number to crawl'
+      target_url:
+        description: 'Typecho post URL (e.g. https://www.207725.xyz/index.php/archives/13)'
         required: false
-        default: '1'
-      max_pages:
-        description: 'Maximum pages to crawl'
-        required: false
-        default: '1'
+        default: 'https://www.207725.xyz'
 
 jobs:
   crawl-and-notify:
@@ -30,23 +26,21 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install aiohttp beautifulsoup4 python-telegram-bot lxml fake-useragent aiodns tqdm
+        pip install requests beautifulsoup4 python-telegram-bot lxml
         
-    - name: Run Enhanced Typecho crawler
+    - name: Run Typecho crawler
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        BLOG_URL: 'https://www.207725.xyz'
-        START_PAGE: ${{ github.event.inputs.start_page || '1' }}
-        MAX_PAGES: ${{ github.event.inputs.max_pages || '1' }}
+        TARGET_URL: ${{ github.event.inputs.target_url || 'https://www.207725.xyz' }}
       run: |
-        python enhanced_typecho_crawler.py
+        python typecho_crawler.py "$TARGET_URL"
         
     - name: Archive results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: typecho-crawl-results
+        name: crawl-results
         path: |
-          typecho_output/
+          output.html
           crawl_log.txt
