@@ -1,15 +1,20 @@
-name: Auto Crawl Blog
+name: Auto Crawl Blog - Optimized
 
 on:
   schedule:
-    # 每天凌晨3点运行 (UTC时间)
+    # 每天UTC时间3点运行 (北京时间11点)
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       times:
         description: 'Number of visits to simulate'
         required: false
-        default: '15'
+        default: '30'
+        type: string
+      max_pages:
+        description: 'Max pages to crawl for articles'
+        required: false
+        default: '5'
         type: string
 
 jobs:
@@ -30,15 +35,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install aiohttp beautifulsoup4
     
-    - name: Run crawler
+    - name: Run optimized crawler
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       run: |
-        python crawler.py \
+        python optimized_crawler.py \
           --base-url "https://www.207725.xyz" \
-          --times ${{ github.event.inputs.times || 15 }} \
-          --max-pages 3 \
+          --times ${{ github.event.inputs.times || 30 }} \
+          --max-pages ${{ github.event.inputs.max_pages || 5 }} \
           --tg-bot-token "$TG_BOT_TOKEN" \
           --tg-chat-id "$TG_CHAT_ID" \
-          --delay 1.5
+          --max-concurrent 3
