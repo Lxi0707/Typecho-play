@@ -8,10 +8,11 @@ on:
       normal_visits:
         description: '普通访问次数'
         required: false
-        default: '500'
+        default: '200'
       required_visits:
         description: '每个必刷URL的访问次数'
         required: false
+        default: '200'
 
 jobs:
   visit:
