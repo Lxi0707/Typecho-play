@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+Typecho博客自动访问脚本
+功能：
+1. 从posts.txt加载必刷URL列表
+2. 自动发现博客文章
+3. 均匀分配访问量
+4. Telegram通知
+5. 详细统计报告
+"""
+
 import asyncio
 import aiohttp
 import random
@@ -7,39 +17,43 @@ from datetime import datetime
 import logging
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Tuple
 
-# 配置部分
-BLOG_URL = "https://www.207725.xyz"
-POSTS_FILE = "posts.txt"  # 必刷URL列表文件
-TELEGRAM_TIMEOUT = 10  # Telegram通知超时(秒)
-REQUEST_TIMEOUT = 15    # 请求超时(秒)
+# 基础配置
+CONFIG = {
+    'blog_url': 'https://www.207725.xyz',
+    'posts_file': 'posts.txt',
+    'telegram_timeout': 10,
+    'request_timeout': 15,
+    'min_delay': 0.3,
+    'max_delay': 2.0,
+    'default_urls': [
+        '/index.php/archives/13/',
+        '/index.php/archives/5/'
+    ]
+}
 
-# 用户代理列表 (更新至2024年最新版本)
+# 用户代理池 (2024年最新版)
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+    "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
 ]
 
 class BlogVisitor:
-    def __init__(self, total_visits: int):
-        self.total_visits = total_visits
+    def __init__(self, visits: int):
+        self.normal_visits = visits
         self.stats = {
-            'required': {'success': 0, 'failure': 0},
-            'normal': {'success': 0, 'failure': 0}
+            'required': {'success': 0, 'failure': 0, 'urls': {}},
+            'normal': {'success': 0, 'failure': 0, 'urls': {}}
         }
-        self.visited_urls: Dict[str, Dict[str, int]] = {
-            'required': {},
-            'normal': {}
-        }
-        self.session = None
+        self.start_time = datetime.now()
         self._setup_logging()
         
-        logger.info(f"Initialized with {total_visits} normal visits")
-        logger.info(f"Python {sys.version.split()[0]} on {sys.platform}")
+        logger.info(f"初始化完成 | 普通访问量: {visits}")
+        logger.info(f"Python {sys.version.split()[0]} | {sys.platform}")
 
     def _setup_logging(self):
         """配置日志系统"""
@@ -49,208 +63,180 @@ class BlogVisitor:
             format='%(asctime)s [%(levelname)s] %(message)s',
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler('visitor.log', encoding='utf-8')
+                logging.FileHandler('visit.log', encoding='utf-8')
             ]
         )
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger('typecho_visitor')
 
-    async def _load_urls_from_file(self, filename: str) -> List[str]:
-        """从文件加载URL列表"""
+    async def _get_urls(self) -> Tuple[List[str], List[str]]:
+        """获取URL列表：返回(必刷URLs, 普通URLs)"""
+        required_urls = await self._load_required_urls()
+        normal_urls = await self._discover_urls()
+        return required_urls, normal_urls or self._get_fallback_urls()
+
+    async def _load_required_urls(self) -> List[str]:
+        """加载必刷URL列表"""
         try:
-            if not os.path.exists(filename):
-                default_urls = [
-                    f"{BLOG_URL}/index.php/archives/13/",
-                    f"{BLOG_URL}/index.php/archives/5/"
-                ]
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(default_urls))
-                logger.warning(f"Created {filename} with default URLs")
-                return default_urls
+            if not os.path.exists(CONFIG['posts_file']):
+                with open(CONFIG['posts_file'], 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(CONFIG['default_urls']))
+                logger.warning(f"已创建默认 {CONFIG['posts_file']}")
             
-            with open(filename, 'r', encoding='utf-8') as f:
-                urls = [line.strip() for line in f if line.strip()]
-                return [
-                    url if url.startswith('http') else f"{BLOG_URL}{url}"
-                    for url in urls
-                ]
+            with open(CONFIG['posts_file'], 'r', encoding='utf-8') as f:
+                return [self._normalize_url(line.strip()) for line in f if line.strip()]
         except Exception as e:
-            logger.error(f"Failed to load {filename}: {str(e)}")
+            logger.error(f"加载必刷URL失败: {str(e)}")
             return []
 
-    async def _fetch_articles(self) -> List[str]:
-        """从博客获取文章列表"""
+    async def _discover_urls(self) -> List[str]:
+        """自动发现文章URL"""
         try:
-            headers = {
-                "User-Agent": random.choice(USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            }
+            headers = {'User-Agent': random.choice(USER_AGENTS)}
+            timeout = aiohttp.ClientTimeout(total=CONFIG['request_timeout'])
             
-            timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(BLOG_URL, headers=headers) as resp:
+                async with session.get(CONFIG['blog_url'], headers=headers) as resp:
                     if resp.status == 200:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(await resp.text(), 'html.parser')
                         return list({
-                            link['href'] if link['href'].startswith('http') 
-                            else f"{BLOG_URL}{link['href']}"
-                            for link in soup.find_all('a', href=True)
-                            if '/archives/' in link['href']
+                            self._normalize_url(a['href'])
+                            for a in soup.find_all('a', href=True)
+                            if '/archives/' in a['href']
                         })
-                    logger.warning(f"Fetch failed: HTTP {resp.status}")
+                    logger.warning(f"发现文章失败 HTTP {resp.status}")
         except Exception as e:
-            logger.error(f"Error fetching articles: {str(e)}")
-        
-        return self._get_fallback_urls()
+            logger.error(f"文章发现错误: {str(e)}")
+        return []
+
+    def _normalize_url(self, url: str) -> str:
+        """标准化URL格式"""
+        if url.startswith('http'):
+            return url
+        return f"{CONFIG['blog_url']}{url if url.startswith('/') else '/' + url}"
 
     def _get_fallback_urls(self) -> List[str]:
         """获取备用URL列表"""
-        return [
-            f"{BLOG_URL}/index.php/archives/13/",
-            f"{BLOG_URL}/index.php/archives/5/",
-            f"{BLOG_URL}/index.php/archives/1/"
-        ]
+        return [self._normalize_url(url) for url in CONFIG['default_urls']]
 
-    async def _visit_url(self, url: str, is_required: bool = False):
-        """访问单个URL"""
+    async def _visit(self, session: aiohttp.ClientSession, url: str, is_required: bool):
+        """执行单次访问"""
         try:
+            await asyncio.sleep(random.uniform(CONFIG['min_delay'], CONFIG['max_delay']))
+            
             headers = {
-                "User-Agent": random.choice(USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml",
-                "Referer": BLOG_URL,
-                "DNT": "1",
+                'User-Agent': random.choice(USER_AGENTS),
+                'Referer': CONFIG['blog_url'],
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
             
-            await asyncio.sleep(random.uniform(0.3, 2.0))
-            
-            async with self.session.get(
-                url, 
-                headers=headers, 
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=CONFIG['request_timeout'])
             ) as resp:
                 key = 'required' if is_required else 'normal'
                 if resp.status == 200:
                     self.stats[key]['success'] += 1
-                    self.visited_urls[key][url] = self.visited_urls[key].get(url, 0) + 1
-                    logger.debug(f"Visited: {url}")
+                    self.stats[key]['urls'][url] = self.stats[key]['urls'].get(url, 0) + 1
+                    logger.debug(f"访问成功: {url}")
                 else:
                     self.stats[key]['failure'] += 1
-                    logger.warning(f"Failed {url} (HTTP {resp.status})")
+                    logger.warning(f"访问失败: {url} (HTTP {resp.status})")
         except Exception as e:
             key = 'required' if is_required else 'normal'
             self.stats[key]['failure'] += 1
-            logger.error(f"Error visiting {url}: {str(e)}")
+            logger.error(f"访问错误: {url} - {str(e)}")
 
-    async def run_required_visits(self):
-        """执行必刷URL访问"""
-        required_urls = await self._load_urls_from_file(POSTS_FILE)
-        if not required_urls:
-            logger.error("No required URLs to visit")
-            return
+    async def _run_visits(self, urls: List[str], is_required: bool = False):
+        """执行批量访问"""
+        if not urls:
+            return logger.error("无有效URL可访问")
             
-        logger.info(f"Starting required visits for {len(required_urls)} URLs")
+        logger.info(f"开始{'必刷' if is_required else '普通'}访问 | URL数量: {len(urls)}")
         
-        async with aiohttp.ClientSession() as self.session:
-            tasks = [self._visit_url(url, True) for url in required_urls]
-            await asyncio.gather(*tasks)
-        
-        logger.info(f"Required visits completed: {self.stats['required']['success']} success")
-
-    async def run_normal_visits(self):
-        """执行普通访问"""
-        if self.total_visits <= 0:
-            logger.info("Skipping normal visits")
-            return
-            
-        article_urls = await self._fetch_articles() or self._get_fallback_urls()
-        if not article_urls:
-            logger.error("No articles found for normal visits")
-            return
-            
-        logger.info(f"Distributing {self.total_visits} visits across {len(article_urls)} URLs")
-        
-        base_visits = self.total_visits // len(article_urls)
-        extra_visits = self.total_visits % len(article_urls)
-        
-        async with aiohttp.ClientSession() as self.session:
+        async with aiohttp.ClientSession() as session:
             tasks = []
-            for i, url in enumerate(article_urls):
-                visits = base_visits + (1 if i < extra_visits else 0)
-                tasks.extend([self._visit_url(url) for _ in range(visits)])
+            if is_required:
+                tasks = [self._visit(session, url, True) for url in urls]
+            else:
+                base_count = self.normal_visits // len(urls)
+                extra = self.normal_visits % len(urls)
+                for i, url in enumerate(urls):
+                    count = base_count + (1 if i < extra else 0)
+                    tasks.extend([self._visit(session, url, False) for _ in range(count)])
             
             await asyncio.gather(*tasks)
-        
-        logger.info(f"Normal visits completed: {self.stats['normal']['success']} success")
 
-    async def generate_report(self) -> str:
-        """生成统计报告"""
-        total_success = sum(s['success'] for s in self.stats.values())
-        total_failure = sum(s['failure'] for s in self.stats.values())
+    async def _send_report(self):
+        """发送统计报告"""
+        duration = (datetime.now() - self.start_time).total_seconds()
+        total_success = sum(v['success'] for v in self.stats.values())
+        total_failure = sum(v['failure'] for v in self.stats.values())
         
-        report = [
-            "📊 博客访问统计报告",
-            f"🌐 博客地址: {BLOG_URL}",
+        def format_urls(url_type: str) -> str:
+            return '\n'.join(
+                f"  - {url.replace(CONFIG['blog_url'], '')}: {count}次"
+                for url, count in self.stats[url_type]['urls'].items()
+            )
+        
+        message = [
+            "✨ Typecho访问统计报告",
+            f"⏱️ 总耗时: {duration:.1f}秒",
+            f"🌐 博客地址: {CONFIG['blog_url']}",
             "",
             "🔴 必刷URL统计:",
-            f"  ✅ 成功: {self.stats['required']['success']}",
-            f"  ❌ 失败: {self.stats['required']['failure']}",
+            f"  ✅ 成功: {self.stats['required']['success']}次",
+            f"  ❌ 失败: {self.stats['required']['failure']}次",
             "",
             "🟢 普通访问统计:",
-            f"  🎯 目标: {self.total_visits}",
-            f"  ✅ 成功: {self.stats['normal']['success']}",
-            f"  ❌ 失败: {self.stats['normal']['failure']}",
-            f"  📊 成功率: {self.stats['normal']['success']/self.total_visits*100:.1f}%" if self.total_visits > 0 else "",
+            f"  🎯 目标: {self.normal_visits}次",
+            f"  ✅ 成功: {self.stats['normal']['success']}次",
+            f"  ❌ 失败: {self.stats['normal']['failure']}次",
+            f"  📊 成功率: {self.stats['normal']['success']/self.normal_visits*100:.1f}%" if self.normal_visits > 0 else "",
             "",
-            "📌 访问分布详情:"
+            "📌 必刷URL访问分布:",
+            format_urls('required'),
+            "",
+            "📝 普通URL访问分布:",
+            format_urls('normal')
         ]
         
-        for url_type in ['required', 'normal']:
-            if self.visited_urls[url_type]:
-                report.append(f"\n{(url_type.capitalize())} URLs:")
-                for url, count in self.visited_urls[url_type].items():
-                    report.append(f"  - {url.replace(BLOG_URL, '')}: {count}次")
-        
-        return '\n'.join(report)
+        await self._notify_telegram('\n'.join(filter(None, message)))
 
-    async def send_telegram_notification(self, message: str):
+    async def _notify_telegram(self, text: str):
         """发送Telegram通知"""
-        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
-        if not bot_token or not chat_id:
-            logger.warning("Telegram配置缺失，跳过通知")
-            return
+        if not (token := os.getenv('TELEGRAM_BOT_TOKEN')) or not (chat_id := os.getenv('TELEGRAM_CHAT_ID')):
+            return logger.warning("未配置Telegram通知")
             
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
+            'chat_id': chat_id,
+            'text': text,
+            'parse_mode': 'Markdown',
+            'disable_web_page_preview': True
         }
         
         try:
             async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=TELEGRAM_TIMEOUT)
+                timeout=aiohttp.ClientTimeout(total=CONFIG['telegram_timeout'])
             ) as session:
                 async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
-                        error = await resp.text()
-                        logger.error(f"Telegram发送失败: HTTP {resp.status} - {error}")
+                        logger.error(f"Telegram通知失败: HTTP {resp.status}")
         except Exception as e:
-            logger.error(f"发送Telegram通知出错: {str(e)}")
+            logger.error(f"Telegram通知错误: {str(e)}")
 
-    async def run(self):
+    async def execute(self):
         """主执行流程"""
-        start_time = datetime.now()
+        required_urls, normal_urls = await self._get_urls()
         
-        await self.run_required_visits()
-        await self.run_normal_visits()
+        await self._run_visits(required_urls, is_required=True)
+        await self._run_visits(normal_urls)
         
-        report = await self.generate_report()
-        await self.send_telegram_notification(report)
-        
-        logger.info(f"Total execution time: {(datetime.now()-start_time).total_seconds():.1f}s")
+        await self._send_report()
+        logger.info("任务执行完成")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -258,15 +244,15 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
-        "-n", "--visits",
+        '-n', '--visits',
         type=int,
         default=100,
-        help="普通访问次数(必刷URL不计入此数量)"
+        help='普通访问次数（必刷URL不计入）'
     )
     args = parser.parse_args()
     
     visitor = BlogVisitor(args.visits)
-    asyncio.run(visitor.run())
+    asyncio.run(visitor.execute())
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
