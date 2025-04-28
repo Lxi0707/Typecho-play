@@ -27,7 +27,7 @@ CONFIG = {
     'max_delay': 3.0,
     'max_retries': 2,
     'conn_limit': 10,
-    'req_per_url': 3,  # 默认每个必刷URL访问次数
+    'req_per_url': 200,  # 默认每个必刷URL访问次数
     'default_urls': [
         '/index.php/archives/13/',
         '/index.php/archives/5/'
