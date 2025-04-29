@@ -2,7 +2,7 @@ name: Typecho Pro Visitor
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # 每天UTC时间1点运行
+    - cron: '*/5 * * * *'  # 5分钟运行
   workflow_dispatch:
     inputs:
       normal_visits:
