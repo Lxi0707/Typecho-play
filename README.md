@@ -1,4 +1,4 @@
-# Typecho-play 用于模拟浏览器刷取流量
+# Typecho-play 批量访问测试
 
 ## 使用介绍
 
