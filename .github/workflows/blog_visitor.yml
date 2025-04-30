@@ -47,7 +47,7 @@ jobs:
             python blog_visitor_pro.py --normal-visits ${{ github.event.inputs.normal_visits || 500 }}
           else
             python blog_visitor_pro.py \
-              --normal-visits ${{ github.event.inputs.normal_visits || 500 }} \
+              --normal-visits ${{ github.event.inputs.normal_visits || 11 }} \
               --required-visits ${{ github.event.inputs.required_visits }}
           fi
       
