@@ -19,7 +19,7 @@
 
 7. required_visits 为手动必刷url次数，default，按每个url均分，默认200
 
-# TELEGRAM_bot推送配置指南
+# Telegram_bot推送配置指南
 
 ## 目录
 1. [创建 Telegram Bot](#1-创建-telegram-bot)
