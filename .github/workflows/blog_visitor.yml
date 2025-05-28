@@ -12,7 +12,7 @@ on:
       required_visits:
         description: '每个必刷URL的访问次数'
         required: false
-        default: '200'
+        default: '500'
 
 jobs:
   visit:
