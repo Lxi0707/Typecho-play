@@ -13,7 +13,7 @@
         '/index.php/archives/5/'
     ] 为自己博客中文章的url 
 
-5. .github/workflows/blog_visitor.yml 中cron为定时任务，默认 `0 12 * * *`  每天中午 12 点整运行，根据自己喜好更改
+5. .github/workflows/blog_visitor.yml 中cron为定时任务，默认 `0 0 * * *`  每天8点整运行，根据自己喜好更改
 
 6. normal_visits 为手动普通模拟次数，default 按总抓取文章自动分配的总浏览量，默认200
 
